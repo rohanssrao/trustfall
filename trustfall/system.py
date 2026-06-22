@@ -197,12 +197,13 @@ class IPv6Suppressor:
 
 class Netfilter:
     def __init__(self, env: Env, port: int, redirect_ports: list[int] | None = None,
-                 funnel: bool = False, dns_port: int = 0):
+                 funnel: bool = False, dns_port: int = 0, dtls_port: int = 0):
         self.env = env
         self.port = port
         self.redirect_ports = redirect_ports or []
         self.funnel = funnel        # drop QUIC/DoH/DoT to force traffic into TCP+TLS
         self.dns_port = dns_port    # >0: REDIRECT target UDP/53 to our DNS responder
+        self.dtls_port = dtls_port  # >0: REDIRECT target UDP/5684 to our DTLS proxy
         self.rules: list[list[str]] = []
 
     def enable_forwarding(self):
@@ -237,12 +238,14 @@ class Netfilter:
             lambda chain, line: (chain == "INPUT" and f"--dport {self.port}" in line and "-j ACCEPT" in line)
             or (chain == "FORWARD" and e.target_ip in line and "-j ACCEPT" in line)
             or (chain == "FORWARD" and e.target_ip in line and "-j DROP" in line)
-            or (chain == "INPUT" and self.dns_port and f"--dport {self.dns_port}" in line and "-j ACCEPT" in line),
+            or (chain == "INPUT" and self.dns_port and f"--dport {self.dns_port}" in line and "-j ACCEPT" in line)
+            or (chain == "INPUT" and self.dtls_port and f"--dport {self.dtls_port}" in line and "-j ACCEPT" in line),
         )
         self._purge_saved_rules(
             "nat",
             lambda chain, line: chain == "PREROUTING" and "-j REDIRECT" in line
-            and (f"--to-ports {self.port}" in line or (self.dns_port and f"--to-ports {self.dns_port}" in line)),
+            and (f"--to-ports {self.port}" in line or (self.dns_port and f"--to-ports {self.dns_port}" in line)
+                 or (self.dtls_port and f"--to-ports {self.dtls_port}" in line)),
         )
 
     def _desired_rules(self) -> list[list[str]]:
@@ -264,6 +267,11 @@ class Netfilter:
             # target's plaintext :53 to it.
             rules.append(["iptables", "-I", "INPUT", "1", "-i", e.iface, "-s", e.target_ip, "-p", "udp", "--dport", str(self.dns_port), "-j", "ACCEPT"])
             rules.append(["iptables", "-t", "nat", "-A", "PREROUTING", "-i", e.iface, "-s", e.target_ip, "-p", "udp", "--dport", "53", "-j", "REDIRECT", "--to-ports", str(self.dns_port)])
+        if self.dtls_port:
+            # Accept the redirected CoAP/DTLS on our proxy port, and steer the
+            # target's UDP :5684 to it.
+            rules.append(["iptables", "-I", "INPUT", "1", "-i", e.iface, "-s", e.target_ip, "-p", "udp", "--dport", str(self.dtls_port), "-j", "ACCEPT"])
+            rules.append(["iptables", "-t", "nat", "-A", "PREROUTING", "-i", e.iface, "-s", e.target_ip, "-p", "udp", "--dport", "5684", "-j", "REDIRECT", "--to-ports", str(self.dtls_port)])
         rules += self._funnel_rules() if self.funnel else []
         return rules
 
@@ -330,12 +338,13 @@ class NfTables:
     TABLE = APP
 
     def __init__(self, env: Env, port: int, redirect_ports: list[int] | None = None,
-                 funnel: bool = False, dns_port: int = 0):
+                 funnel: bool = False, dns_port: int = 0, dtls_port: int = 0):
         self.env = env
         self.port = port
         self.redirect_ports = redirect_ports or []
         self.funnel = funnel
         self.dns_port = dns_port
+        self.dtls_port = dtls_port
 
     def enable_forwarding(self):
         Path("/proc/sys/net/ipv4/ip_forward").write_text("1\n")
@@ -361,6 +370,8 @@ class NfTables:
         input_rules = [f"ip saddr {e.target_ip} tcp dport {self.port} accept"]
         if self.dns_port:
             input_rules.append(f"ip saddr {e.target_ip} udp dport {self.dns_port} accept")
+        if self.dtls_port:
+            input_rules.append(f"ip saddr {e.target_ip} udp dport {self.dtls_port} accept")
         # funnel drops first (terminal), then broad target accepts
         forward_rules = self._funnel_rules() + [
             f"ip saddr {e.target_ip} accept",
@@ -386,6 +397,8 @@ class NfTables:
             rules = [f"ip saddr {e.target_ip} tcp redirect to :{self.port}"]
         if self.dns_port:
             rules.append(f"ip saddr {e.target_ip} udp dport 53 redirect to :{self.dns_port}")
+        if self.dtls_port:
+            rules.append(f"ip saddr {e.target_ip} udp dport 5684 redirect to :{self.dtls_port}")
         return rules
 
     def _funnel_rules(self) -> list[str]:

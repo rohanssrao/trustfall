@@ -7,7 +7,7 @@
     let
       systems = [ "x86_64-linux" "aarch64-linux" ];
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
-      runtimeDeps = pkgs: with pkgs; [ uv python3 iproute2 iptables nftables tcpdump openssl ];
+      runtimeDeps = pkgs: with pkgs; [ uv python3 iproute2 iptables nftables conntrack-tools tcpdump openssl ];
     in {
       # `sudo nix run .` — just works. The wrapper sets LD_LIBRARY_PATH (for
       # libpcap) inside the program, so sudo stripping it is irrelevant. Run from

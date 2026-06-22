@@ -104,6 +104,41 @@ sed -i "s#/SESSION#${SESSION}#g" "$SESSION/server.py"
 ip netns exec "$GW_NS" python3 "$SESSION/server.py" & PIDS+=("$!")
 sleep 1
 
+# A real DTLS (CoAP/DTLS) echo server in the gateway namespace, to exercise the
+# transparent DTLS MITM path (UDP 5684 redirect + IP_RECVORIGDSTADDR + conntrack).
+cat > "$SESSION/dtls_server.py" <<'PY'
+import socket, datetime as dt
+from OpenSSL import SSL, crypto
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.x509.oid import NameOID
+from trustfall.dtls import DatagramDTLS
+key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+n = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "telemetry.example.test")])
+now = dt.datetime.now(dt.UTC)
+cert = (x509.CertificateBuilder().subject_name(n).issuer_name(n).public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - dt.timedelta(days=1)).not_valid_after(now + dt.timedelta(days=1))
+        .sign(key, hashes.SHA256()))
+ctx = SSL.Context(SSL.DTLS_METHOD)
+ctx.use_certificate(crypto.load_certificate(crypto.FILETYPE_PEM, cert.public_bytes(serialization.Encoding.PEM)))
+ctx.use_privatekey(crypto.load_privatekey(crypto.FILETYPE_PEM, key.private_bytes(
+    serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL, serialization.NoEncryption())))
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.bind(("10.13.37.1", 5684))
+_peek, peer = s.recvfrom(65535, socket.MSG_PEEK); s.connect(peer)
+ep = DatagramDTLS(ctx, s, server=True)
+ep.do_handshake()
+while True:
+    d = ep.recv(2.0)
+    if d is None:
+        break
+    if d:
+        ep.send(b"ack:" + d)
+PY
+ip netns exec "$GW_NS" "$UV" run --no-sync --project "$ROOT" python "$SESSION/dtls_server.py" >"$SESSION/dtls_server.log" 2>&1 & PIDS+=("$!")
+sleep 2
+
 # Start Trustfall in the mole namespace. ARP spoofing and iptables happen only
 # inside the isolated lab namespaces/bridge.
 ip netns exec "$MOLE_NS" "$UV" run --no-sync --project "$ROOT" python -m trustfall.cli "$NET.10" \
@@ -163,6 +198,28 @@ s.close()
 PY
 sleep 1
 
+# DTLS (CoAP-over-DTLS) exchange; expected DTLS interception + decrypted capture.
+echo "[+] dtls exchange; expected DTLS interception + capture"
+cat > "$SESSION/dtls_client.py" <<'PY'
+import socket
+from OpenSSL import SSL
+from trustfall.dtls import DatagramDTLS
+ctx = SSL.Context(SSL.DTLS_METHOD); ctx.set_verify(SSL.VERIFY_NONE, lambda *a: True)
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.connect(("10.13.37.1", 5684))
+ep = DatagramDTLS(ctx, s, server=False)
+ok = ep.do_handshake()
+pkt = bytes([0x40, 0x01, 0x12, 0x34, (11 << 4) | 9]) + b"telemetry" + b" token=dtls-secret"
+ep.send(pkt)
+echo = b""
+for _ in range(12):
+    g = ep.recv(0.5)
+    if g:
+        echo = g; break
+print("dtls_client: handshake", ok, "echo", echo[:48])
+PY
+ip netns exec "$TARGET_NS" "$UV" run --no-sync --project "$ROOT" python "$SESSION/dtls_client.py" || true
+sleep 1
+
 # Stop the mole gracefully (SIGINT) so it runs cleanup + writes the summary,
 # instead of letting the EXIT trap's `ip netns del` SIGKILL it mid-shutdown.
 kill -INT "$MOLE_PID" 2>/dev/null || true
@@ -177,9 +234,13 @@ tail -n +1 "$SESSION/mole.log" || true
 echo "[+] Payload files:"
 find "$SESSION/mole" -type f -maxdepth 4 -print 2>/dev/null || true
 
-if grep -q '"result": "accepted"' "$SESSION/mole.log" && find "$SESSION/mole" -name client.bin -size +0c | grep -q . && [ -f "$SESSION/mole/summary.txt" ] && grep -q '"kind": "COAP"' "$SESSION/mole.log"; then
-  echo "[+] smoke test passed (intercept + capture + summary + coap)"
+echo "[+] DTLS server log:"; cat "$SESSION/dtls_server.log" 2>/dev/null || true
+DTLS_ACCEPTED=$(grep '"proto": "dtls"' "$SESSION/mole.log" 2>/dev/null | grep -c '"result": "accepted"' || true)
+echo "[+] DTLS accepted interceptions: $DTLS_ACCEPTED"
+
+if grep -q '"result": "accepted"' "$SESSION/mole.log" && find "$SESSION/mole" -name client.bin -size +0c | grep -q . && [ -f "$SESSION/mole/summary.txt" ] && grep -q '"kind": "COAP"' "$SESSION/mole.log" && [ "${DTLS_ACCEPTED:-0}" -ge 1 ]; then
+  echo "[+] smoke test passed (intercept + capture + summary + coap + dtls)"
 else
-  echo "[-] smoke test did not observe accepted MITM + payload + coap; inspect $SESSION" >&2
+  echo "[-] smoke test did not observe accepted MITM + payload + coap + dtls; inspect $SESSION" >&2
   exit 2
 fi

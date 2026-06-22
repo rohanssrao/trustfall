@@ -20,9 +20,18 @@ FINDING_LABELS = {
     "private_ca_wrong_host": "HIGH accepts unknown CA and wrong hostname",
     "cn_only_match": "MEDIUM accepts cert without SAN (CN-only matching)",
     "wildcard_mismatch": "HIGH broken wildcard hostname matching",
+    "partial_wildcard": "HIGH accepts partial-label wildcard",
     "weak_key": "MEDIUM accepts undersized (1024-bit) RSA key",
     "public_wrong_host": "HIGH missing hostname validation",
     "expired_match": "MEDIUM missing validity-period check",
+    "not_yet_valid": "MEDIUM accepts not-yet-valid certificate",
+    "weak_sig_sha1": "MEDIUM accepts SHA-1-signed certificate",
+    "weak_sig_md5": "HIGH accepts MD5-signed certificate",
+    "bad_eku": "MEDIUM accepts cert without serverAuth EKU",
+    "non_ca_issuer": "HIGH accepts non-CA issuer (broken path validation)",
+    "null_byte_cn": "HIGH accepts null-byte in certificate name",
+    "anon_cipher": "HIGH negotiates anonymous cipher (MITM without any cert)",
+    "null_cipher": "HIGH negotiates NULL cipher (cleartext on the wire)",
 }
 
 
@@ -35,7 +44,7 @@ def parse_args(argv=None):
     p.add_argument("--cert", dest="cert_opt", help="operator public certificate/fullchain PEM")
     p.add_argument("--key", dest="key_opt", help="operator private key PEM")
     p.add_argument("--mode", choices=["passive", "active"], default="active")
-    p.add_argument("--strategy", choices=["all", "self-signed", "private-ca", "cn-only", "wildcard", "weak-key", "public-wrong-host", "expired"], default="all")
+    p.add_argument("--strategy", choices=["all", "self-signed", "private-ca", "cn-only", "wildcard", "weak-key", "weak-sig", "not-yet-valid", "bad-eku", "non-ca-issuer", "null-cn", "weak-crypto", "public-wrong-host", "expired"], default="all")
     p.add_argument("--retest", choices=["wait", "rst", "auto"], default="wait")
     p.add_argument("--continue-after-success", action="store_true", help="keep rotating strategies after one succeeds")
     p.add_argument("--jsonl", action="store_true", help="emit full JSONL event stream on stdout")
@@ -56,6 +65,8 @@ def parse_args(argv=None):
     p.add_argument("--dns-spoof-domains", help="comma-separated domain suffixes to spoof with --dns-spoof-ip (default: all)")
     p.add_argument("--dns-upstream", help="upstream resolver for DNS passthrough (default: gateway)")
     p.add_argument("--dns-listen-port", type=int, default=9953)
+    p.add_argument("--dtls", action=argparse.BooleanOptionalAction, default=True, help="intercept CoAP/DTLS on UDP 5684 (active mode; requires pyOpenSSL)")
+    p.add_argument("--dtls-listen-port", type=int, default=9856)
     p.add_argument("--suppress-ipv6", action="store_true", help="RA-kill the real IPv6 router so the target falls back to IPv4 (aggressive, LAN-wide)")
     p.add_argument("--cleanup-only", action="store_true", help="discover target/interface, purge Trustfall netfilter rules, restore forwarding, then exit")
     return p.parse_args(argv)
@@ -69,6 +80,7 @@ def main(argv=None):
 
     from .certs import CertificateFactory
     from .dns import DNSResponder
+    from .dtls import DtlsProxy, HAVE_PYOPENSSL
     from .proxy import ProxyServer, State
     from .netos import IS_MACOS, detect_firewall
     from .system import ArpSpoofer, IPv6Suppressor, Netfilter, NfTables, discover, require_root, start_dns_sniffer
@@ -111,9 +123,10 @@ def main(argv=None):
     spoofer: ArpSpoofer | None = None
     dns_responder: DNSResponder | None = None
     ipv6_suppressor: IPv6Suppressor | None = None
+    dtls_proxy = None
 
     if args.cleanup_only:
-        Redirector(env, args.listen_port, [], dns_port=args.dns_listen_port).purge_stale()
+        Redirector(env, args.listen_port, [], dns_port=args.dns_listen_port, dtls_port=args.dtls_listen_port).purge_stale()
         log.emit("INFO", msg="cleanup_only_done", listen_port=args.listen_port)
         log.close()
         return 0
@@ -127,6 +140,8 @@ def main(argv=None):
     state = State(strategies, stop_on_success=not args.continue_after_success)
     funnel = args.funnel and args.mode == "active" and not args.no_netfilter
     dns_port = args.dns_listen_port if funnel else 0
+    dtls_active = args.dtls and args.mode == "active" and not args.no_netfilter and not IS_MACOS and HAVE_PYOPENSSL
+    dtls_port = args.dtls_listen_port if dtls_active else 0
     keylog_path = str(session_dir / "sslkeys.log") if args.pcap else None
     proxy = ProxyServer(
         args.listen_port,
@@ -146,12 +161,14 @@ def main(argv=None):
     cleaned = False
 
     def cleanup():
-        nonlocal cleaned, nf, spoofer, dns_responder, ipv6_suppressor
+        nonlocal cleaned, nf, spoofer, dns_responder, ipv6_suppressor, dtls_proxy
         if cleaned:
             return
         cleaned = True
         stop.set()
         proxy.stop.set()
+        if dtls_proxy:
+            dtls_proxy.stop.set()
         if ipv6_suppressor:
             log.emit("INFO", msg="stopping ipv6 suppression")
             ipv6_suppressor.restore()
@@ -181,7 +198,7 @@ def main(argv=None):
     start_dns_sniffer(env, log, stop, include_udp=args.include_udp, pcap_path=pcap_path)
 
     if args.mode == "active" and not args.no_netfilter:
-        nf = Redirector(env, args.listen_port, redirect_ports, funnel=funnel, dns_port=dns_port)
+        nf = Redirector(env, args.listen_port, redirect_ports, funnel=funnel, dns_port=dns_port, dtls_port=dtls_port)
         nf.install()
         log.emit("INFO", msg="netfilter installed", backend=backend, redirect_ports=args.redirect_ports, funnel=funnel)
         if IS_MACOS:
@@ -213,6 +230,14 @@ def main(argv=None):
         dns_responder.start()
         log.emit("INFO", msg="funnel active: QUIC/DoH/DoT blocked, DNS responder up", dns_upstream=upstream,
                  dns_spoof_ip=args.dns_spoof_ip, suppress_aaaa=True)
+
+    if dtls_active:
+        dtls_proxy = DtlsProxy(args.dtls_listen_port, certs, state, log, str(session_dir),
+                               bind_host="0.0.0.0", no_payloads=args.no_payloads)
+        threading.Thread(target=dtls_proxy.serve, daemon=True).start()
+        log.emit("INFO", msg="dtls interception active (CoAP/DTLS :5684)")
+    elif args.dtls and args.mode == "active" and not args.no_netfilter and not IS_MACOS and not HAVE_PYOPENSSL:
+        log.emit("WARN", msg="DTLS interception requested but pyOpenSSL not installed; CoAP/DTLS detected only")
 
     if not args.no_arp:
         spoofer = ArpSpoofer(env, log)

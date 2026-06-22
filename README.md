@@ -49,10 +49,15 @@ tshark -nr <session-dir>/capture.pcap -o tls.keylog_file:<session-dir>/sslkeys.l
 
 ```text
 --out DIR                      session directory
---strategy NAME                test one cert strategy (default: all)
+--strategy NAME                test one strategy group (default: all). groups:
+                               self-signed, private-ca, cn-only, wildcard,
+                               weak-key, weak-sig, not-yet-valid, bad-eku,
+                               non-ca-issuer, null-cn, weak-crypto, expired,
+                               public-wrong-host
 --cert/--key PEM               operator cert for public-wrong-host testing
 --redirect-ports 80,443        restrict redirected TCP ports
 --no-funnel                    don't block QUIC/DoH/DoT or run the DNS responder
+--no-dtls                      don't intercept CoAP/DTLS on UDP 5684
 --no-pcap                      don't write capture.pcap / sslkeys.log
 --firewall auto|iptables|nft   Linux firewall backend (default: auto)
 --verbose / --quiet / --jsonl  stdout verbosity
@@ -61,9 +66,11 @@ tshark -nr <session-dir>/capture.pcap -o tls.keylog_file:<session-dir>/sslkeys.l
 
 ## What it does
 
-- **Cert strategies** — each isolates one defect: `self-signed`, `private-ca` (unknown CA + wrong host), `cn-only` (no SAN), `wildcard` (non-matching), `weak-key` (1024-bit RSA), `expired`, `public-wrong-host`. One strategy is tried per connection; reconnects rotate through the rest. Rejections are classified by the client's TLS alert, and endpoints that refuse everything opaquely are flagged as **likely certificate pinning**.
+- **Cert strategies** — each isolates one validation defect, tried one per connection and rotated across reconnects: chain/trust (`self-signed`, `private-ca`, `non-ca-issuer`), hostname (`cn-only`, `wildcard`, `partial-wildcard`, `null-cn`), validity (`expired`, `not-yet-valid`), and key/signature/extension (`weak-key`, `weak-sig` SHA-1/MD5, `bad-eku`), plus `public-wrong-host` with `--cert/--key`. Rejections are classified by the client's TLS alert, and endpoints that refuse everything opaquely are flagged as **likely certificate pinning**.
+- **Weak-crypto probes** — offers anonymous (`aNULL`, no certificate) and NULL-encryption (`eNULL`) ciphers; acceptance means a device can be MITM'd with no cert at all, or talks cleartext on the wire.
+- **DTLS interception** — transparently MITMs **CoAP/DTLS** (UDP 5684) with the same forged-cert strategies, decrypting and capturing the CoAP underneath (X.509-mode only; PSK/raw-public-key can't be MITM'd). Requires `pyOpenSSL` and conntrack visibility (the `conntrack` tool or `/proc/net/nf_conntrack`).
 - **Traffic funnel** (on by default, active mode) — blocks QUIC/HTTP3, DoH/DoT, suppresses AAAA, and strips STARTTLS so traffic falls back into the interceptable TCP+TLS path. Flags **TLS fail-open** if a device retries in cleartext after its handshake is refused.
-- **Passive recon** — decodes SNI/ALPN/**JA3**, DNS, mDNS service names, and plaintext **CoAP**; flags **CoAP/DTLS** and **IPv6 escape** (traffic outside IPv4 ARP scope). Captures the *real* upstream cert for ground-truth comparison and scans payloads for secrets.
+- **Passive recon** — decodes SNI/ALPN/**JA3**, DNS, mDNS service names, and plaintext **CoAP**; flags **IPv6 escape** (traffic outside IPv4 ARP scope). Captures the *real* upstream cert for ground-truth comparison and scans payloads for secrets.
 - **Outputs** — `summary.json` (per-endpoint findings + a device inventory of domains/endpoints/protocols/JA3), `events.jsonl`, per-session payloads, and a Wireshark-decryptable pcap.
 
 ## Platform support

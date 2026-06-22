@@ -40,6 +40,14 @@ FINDINGS = {
     "accepts_undersized_rsa_key": "accepts undersized (1024-bit) RSA key",
     "missing_hostname_validation": "no hostname validation",
     "missing_validity_period_check": "no validity-period check",
+    "accepts_not_yet_valid_cert": "no validity check (accepts not-yet-valid)",
+    "accepts_partial_label_wildcard": "accepts partial-label wildcard (RFC 6125 violation)",
+    "accepts_weak_sig_algorithm": "accepts weak signature (SHA-1/MD5)",
+    "accepts_cert_without_serverauth_eku": "ignores EKU (no serverAuth)",
+    "accepts_non_ca_issuer": "broken path validation (non-CA issuer)",
+    "accepts_null_byte_in_cn": "null-byte CN truncation",
+    "accepts_anonymous_cipher_no_cert": "negotiates anonymous cipher \u2014 MITM with no cert",
+    "accepts_null_cipher_cleartext": "negotiates NULL cipher \u2014 cleartext on the wire",
     "certificate_validation_bypass": "certificate validation bypass",
 }
 

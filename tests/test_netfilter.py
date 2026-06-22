@@ -42,3 +42,9 @@ def test_delete_cmd_strips_insert_index_for_drop():
     deleted = Netfilter._delete_cmd(drop)
     assert "-D" in deleted and "-I" not in deleted
     assert "1" not in deleted[: deleted.index("-D") + 2]  # the insert index was removed
+
+
+def test_dtls_redirect_rules():
+    rules = _rule_strings(Netfilter(_env(), 9900, [443], funnel=True, dtls_port=9856))
+    assert any("udp --dport 5684 -j REDIRECT --to-ports 9856" in r for r in rules)
+    assert any("INPUT" in r and "udp --dport 9856 -j ACCEPT" in r for r in rules)

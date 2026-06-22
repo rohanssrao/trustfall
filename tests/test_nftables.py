@@ -90,3 +90,9 @@ def test_detect_firewall_prefers_iptables_then_nft(monkeypatch):
     monkeypatch.setattr(netos.shutil, "which", lambda b: "/sbin/" + b)
     assert netos.detect_firewall("auto") == "iptables"
     assert netos.detect_firewall("nft") == "nft"
+
+
+def test_dtls_redirect_and_input_accept():
+    rs = _ruleset(redirect_ports=[443], funnel=True, dtls_port=9856)
+    assert "ip saddr 10.0.0.50 udp dport 5684 redirect to :9856" in rs
+    assert "ip saddr 10.0.0.50 udp dport 9856 accept" in rs

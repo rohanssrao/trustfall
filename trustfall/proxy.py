@@ -84,6 +84,31 @@ _ALERT_MEANING = {
 PINNING_ALERTS = {"bad_certificate", "certificate_unknown", "handshake_failure", "access_denied"}
 _ALERT_RE = re.compile(r"ALERT_([A-Z_]+)")
 
+# Maps an accepted strategy to the validation defect it proves.
+STRATEGY_FINDING = {
+    "self_signed_match": "missing_chain_validation",
+    "private_ca_match": "trusts_unknown_ca_or_missing_chain_validation",
+    "private_ca_wrong_host": "accepted_unknown_ca_wrong_host",
+    "cn_only_match": "accepts_cn_without_san",
+    "wildcard_mismatch": "broken_wildcard_hostname_matching",
+    "partial_wildcard": "accepts_partial_label_wildcard",
+    "weak_key": "accepts_undersized_rsa_key",
+    "public_wrong_host": "missing_hostname_validation",
+    "expired_match": "missing_validity_period_check",
+    "not_yet_valid": "accepts_not_yet_valid_cert",
+    "weak_sig_sha1": "accepts_weak_sig_algorithm",
+    "weak_sig_md5": "accepts_weak_sig_algorithm",
+    "bad_eku": "accepts_cert_without_serverauth_eku",
+    "non_ca_issuer": "accepts_non_ca_issuer",
+    "null_byte_cn": "accepts_null_byte_in_cn",
+    "anon_cipher": "accepts_anonymous_cipher_no_cert",
+    "null_cipher": "accepts_null_cipher_cleartext",
+}
+
+
+def finding_for(strategy: str) -> str:
+    return STRATEGY_FINDING.get(strategy, "certificate_validation_bypass")
+
 
 def classify_tls_alert(error: str | None) -> str | None:
     """Extract the TLS alert name (e.g. 'unknown_ca') from an SSLError string."""
@@ -287,7 +312,14 @@ class ProxyServer:
 
         material = self.certs.material_for(strategy, sni, dst_ip)
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        context.load_cert_chain(material.certfile, material.keyfile)
+        if material.min_version:
+            context.minimum_version = getattr(ssl.TLSVersion, material.min_version)
+        if material.max_version:
+            context.maximum_version = getattr(ssl.TLSVersion, material.max_version)
+        if material.ciphers:
+            context.set_ciphers(material.ciphers)
+        if not material.no_cert:
+            context.load_cert_chain(material.certfile, material.keyfile)
         self._apply_keylog(context)
         try:
             tls_client = context.wrap_socket(client, server_side=True)
@@ -469,16 +501,7 @@ class ProxyServer:
             self.log.emit("SECRET", session=session, dest=dest, proto=proto, secret=h.kind, direction=h.direction, value=h.masked)
 
     def _finding(self, strategy: str) -> str:
-        return {
-            "self_signed_match": "missing_chain_validation",
-            "private_ca_match": "trusts_unknown_ca_or_missing_chain_validation",
-            "private_ca_wrong_host": "accepted_unknown_ca_wrong_host",
-            "cn_only_match": "accepts_cn_without_san",
-            "wildcard_mismatch": "broken_wildcard_hostname_matching",
-            "weak_key": "accepts_undersized_rsa_key",
-            "public_wrong_host": "missing_hostname_validation",
-            "expired_match": "missing_validity_period_check",
-        }.get(strategy, "certificate_validation_bypass")
+        return finding_for(strategy)
 
 
 def http_host(data: bytes) -> str | None:
