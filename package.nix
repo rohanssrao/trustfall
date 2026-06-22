@@ -63,6 +63,7 @@ python3Packages.buildPythonPackage (finalAttrs: {
     maintainers = with lib.maintainers; [
       rohanssrao
     ];
+    sourceProvenance = with lib.sourceTypes; [ fromSource ];
   };
 
 })
