@@ -19,7 +19,7 @@ python3Packages.buildPythonPackage (finalAttrs: {
     owner = "rohanssrao";
     repo = "trustfall";
     rev = finalAttrs.version;
-    hash = "sha256-MQPsRtfDKJRoDztSM3Qdg/08btHPwdkDrb1PJsH1YGc=";
+    hash = "sha256-DYzDFofcaA3D4OAlHg8wGoXAs9dG6o0uX5RtXFnfZKU=";
   };
 
   pyproject = true;
