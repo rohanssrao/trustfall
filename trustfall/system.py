@@ -18,6 +18,39 @@ from .tlshello import dtls_version, looks_dtls_client_hello, looks_tls, parse_cl
 from . import APP
 
 
+def _ensure_libpcap():
+    """Make scapy's BPF filters (ARP responder, pcap writer, sniffer) work where
+    libpcap exists but isn't in the ldconfig cache `ctypes.util.find_library`
+    consults — e.g. NixOS, where libpcap lives in a nix-store path that uv- or
+    pip-managed Pythons never see. Must run before scapy first compiles a filter
+    (scapy.libs.winpcapy caches find_library's failure at import)."""
+    import ctypes
+    import ctypes.util
+    import glob
+
+    if ctypes.util.find_library("pcap"):
+        return
+    candidates: list[str] = []
+    for pat in ("/run/current-system/sw/lib/libpcap.so*",
+                "/usr/lib/libpcap.so*", "/usr/lib/*/libpcap.so*",
+                "/usr/local/lib/libpcap.so*",
+                "/nix/store/*-libpcap*/lib/libpcap.so*"):
+        candidates.extend(sorted(glob.glob(pat)))
+    for path in candidates:
+        try:
+            ctypes.CDLL(path)
+        except OSError:
+            continue
+        _orig = ctypes.util.find_library
+        ctypes.util.find_library = (
+            lambda name, _path=path, _orig=_orig: _path if name == "pcap" else _orig(name)
+        )
+        return
+
+
+_ensure_libpcap()
+
+
 
 @dataclass
 class Env:
