@@ -75,6 +75,9 @@ class _FakeTLS:
     def __init__(self, chunks):
         self.chunks = list(chunks)
 
+    def settimeout(self, _t):
+        pass
+
     def recv(self, _n):
         return self.chunks.pop(0) if self.chunks else b""
 

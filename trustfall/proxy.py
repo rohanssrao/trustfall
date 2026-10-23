@@ -19,6 +19,12 @@ from .tlshello import looks_tls, parse_client_hello
 
 BUFFER_SIZE = 65536
 IDLE_TIMEOUT = 60
+# select() calling an fd readable does not mean a TLS socket can return data:
+# a partial record makes recv() block for the missing bytes. Bounded reads keep
+# the pump alive (the other leg's data queues behind a blocking read), while
+# sends get a generous cap so a dead peer cannot wedge a thread forever.
+RECV_POLL_TIMEOUT = 2
+SEND_TIMEOUT = 60
 FIRST_APP_DATA_TIMEOUT = 3
 MAX_SCAN_BYTES = 256 * 1024  # per-direction cap for in-memory secret scanning
 STARTTLS_PORTS = {25, 587, 143, 110, 21, 5222}  # opportunistic-TLS protocols
@@ -445,13 +451,13 @@ class ProxyServer:
                 pass
 
     def _pump(self, client: socket.socket, upstream: socket.socket, payloads: PayloadWriter, strip_starttls: bool = False):
-        # Handshake-phase timeouts must not govern the data pump: a large body
-        # written to a slow upstream raises socket.timeout (an OSError) and used
-        # to tear the session down mid-transfer. Block instead; IDLE_TIMEOUT
-        # decides when an idle session is dead.
+        # Handshake-phase timeouts must not govern the data pump, but fully
+        # unbounded blocking is worse: a stalled leg would wedge the relay.
+        # Reads poll (RECV_POLL_TIMEOUT); sends are capped (SEND_TIMEOUT);
+        # IDLE_TIMEOUT decides when an idle session is dead.
         for sock in (client, upstream):
             try:
-                sock.settimeout(None)
+                sock.settimeout(SEND_TIMEOUT)
             except OSError:
                 pass
         sockets = [client, upstream]
@@ -476,6 +482,11 @@ class ProxyServer:
         """
         while True:
             try:
+                # Bounded read: a partial TLS record makes recv() block for the
+                # missing bytes even though select() called the fd readable;
+                # blocking here wedges the whole pump with the other leg's
+                # data queued behind it. Poll and let select re-arm instead.
+                sock.settimeout(RECV_POLL_TIMEOUT)
                 data = sock.recv(BUFFER_SIZE)
             except socket.timeout:
                 return True
@@ -483,6 +494,11 @@ class ProxyServer:
                 return True
             except (ssl.SSLError, OSError):
                 return False
+            finally:
+                try:
+                    sock.settimeout(SEND_TIMEOUT)
+                except OSError:
+                    pass
             if not data:
                 return False
             try:
