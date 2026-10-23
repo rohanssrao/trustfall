@@ -445,6 +445,15 @@ class ProxyServer:
                 pass
 
     def _pump(self, client: socket.socket, upstream: socket.socket, payloads: PayloadWriter, strip_starttls: bool = False):
+        # Handshake-phase timeouts must not govern the data pump: a large body
+        # written to a slow upstream raises socket.timeout (an OSError) and used
+        # to tear the session down mid-transfer. Block instead; IDLE_TIMEOUT
+        # decides when an idle session is dead.
+        for sock in (client, upstream):
+            try:
+                sock.settimeout(None)
+            except OSError:
+                pass
         sockets = [client, upstream]
         stripped = [False]
         while True:
@@ -468,6 +477,8 @@ class ProxyServer:
         while True:
             try:
                 data = sock.recv(BUFFER_SIZE)
+            except socket.timeout:
+                return True
             except (ssl.SSLWantReadError, ssl.SSLWantWriteError):
                 return True
             except (ssl.SSLError, OSError):
