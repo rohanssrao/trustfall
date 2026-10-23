@@ -363,7 +363,15 @@ class ProxyServer:
         try:
             upstream.connect((dst_ip, dst_port))
             if downstream_tls:
+                # We are the MITM and already unverified upstream; be maximally
+                # permissive so ancient IoT servers (512-bit DH, legacy
+                # renegotiation, SHA-1 signatures) still relay transparently.
                 context = ssl._create_unverified_context()
+                context.options |= ssl.OP_LEGACY_SERVER_CONNECT
+                try:
+                    context.set_ciphers("DEFAULT:@SECLEVEL=0")
+                except ssl.SSLError:
+                    pass
                 self._apply_keylog(context)
                 upstream = context.wrap_socket(upstream, server_hostname=upstream_sni or None)
                 self.log.emit("UPSTREAM_TLS", dest=f"{dst_ip}:{dst_port}", sni=upstream_sni or "none", tls=upstream.version(), cipher=(upstream.cipher() or [None])[0])
