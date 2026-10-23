@@ -77,9 +77,21 @@ def discover(target_ip: str) -> Env:
 
 
 def mac_for(ip: str, iface: str, timeout: int = 2) -> str:
-    ans, _ = srp(Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(pdst=ip), timeout=timeout, iface=iface, verbose=False)
-    for _, response in ans:
-        return response[Ether].src
+    try:
+        ans, _ = srp(Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(pdst=ip), timeout=timeout, iface=iface, verbose=False)
+        for _, response in ans:
+            return response[Ether].src
+    except Exception:
+        pass
+    # srp can come up empty when the target sits behind a power-saving WiFi hop;
+    # fall back to the kernel neighbor table (ping first to populate it).
+    for _ in range(3):
+        out = run(["ip", "neigh", "show", ip, "dev", iface], check=False).stdout
+        for line in out.splitlines():
+            if "lladdr" in line and "FAILED" not in line and "INCOMPLETE" not in line:
+                return line.split("lladdr ")[1].split()[0]
+        run(["ping", "-c", "1", "-W", "1", ip], check=False)
+        time.sleep(0.5)
     raise RuntimeError(f"could not resolve MAC for {ip} on {iface}")
 
 
