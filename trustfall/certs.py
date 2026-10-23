@@ -26,6 +26,109 @@ SAFE = re.compile(r"[^A-Za-z0-9_.-]+")
 ANON_CIPHERS = "aNULL:@SECLEVEL=0"
 NULL_CIPHERS = "NULL:@SECLEVEL=0"
 
+# The October 2026 eMudhra incident: eight intermediate CAs were generated with
+# ECDSA P-384 keys whose private scalars were tiny (this one is d=4), making the
+# "private" keys effectively public (https://emudhra.we-have-a-problem.com/).
+# Below are the compromised "EM OV TLS CA - G3C" intermediate and its
+# cross-certificates (via "emSign Root TLS CA - G3" and Comodo's "AAA Certificate
+# Services"), identical to what mitmproxy ships for --emudhra (#8500). A device
+# that accepts a leaf minted under this chain still trusts the publicly
+# compromised CA: a frozen trust store or missing revocation/distrust updating.
+# The key is public knowledge - never present this chain outside authorized testing.
+EMUDHRA_CHAIN_PEM = b"""
+
+-----BEGIN PRIVATE KEY-----
+MIG2AgEAMBAGByqGSM49AgEGBSuBBAAiBIGeMIGbAgEBBDAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAShZANiAAQTglHNUqyS
+mMHIqtl3Mh3rl+cJvQtMoKylXcitUdz8nRWJoVl+OlEg4e/WMcY+GDXKyuKYaaYu
+FjHoooGBq1ZhbcRdkYq8CfOrDmPPeSqk3O1zh743u6VpVJ8cArJw7Wc=
+-----END PRIVATE KEY-----
+-----BEGIN CERTIFICATE-----
+MIIDaDCCAu6gAwIBAgIPKWkmwiejoVJjkrGUgqUEMAoGCCqGSM49BAMDMFYxCzAJ
+BgNVBAYTAklOMSUwIwYDVQQKDBxlTXVkaHJhIFRlY2hub2xvZ2llcyBMaW1pdGVk
+MSAwHgYDVQQDDBdlbVNpZ24gUm9vdCBUTFMgQ0EgLSBHMzAeFw0yNTA0MzAxNTM3
+NDFaFw00MDA0MjgxODMwMDBaMEAxCzAJBgNVBAYTAlVTMRQwEgYDVQQKDAtlTXVk
+aHJhIEluYzEbMBkGA1UEAwwSRU0gT1YgVExTIENBIC0gRzNDMHYwEAYHKoZIzj0C
+AQYFK4EEACIDYgAEE4JRzVKskpjByKrZdzId65fnCb0LTKCspV3IrVHc/J0ViaFZ
+fjpRIOHv1jHGPhg1ysrimGmmLhYx6KKBgatWYW3EXZGKvAnzqw5jz3kqpNztc4e+
+N7ulaVSfHAKycO1no4IBljCCAZIwHwYDVR0jBBgwFoAU4TqrIXzx401UrtRyt/2L
+WUIgkFQwHQYDVR0OBBYEFDTq6gzryQra+dDF4u2beMmHnhtsMB0GA1UdJQQWMBQG
+CCsGAQUFBwMBBggrBgEFBQcDAjBdBgNVHSAEVjBUMDkGCysGAQQBg44hAQABMCow
+KAYIKwYBBQUHAgEWHGh0dHA6Ly9yZXBvc2l0b3J5LmVtc2lnbi5jb20wDQYLKwYB
+BAGDjiEBAm4wCAYGZ4EMAQICMHUGCCsGAQUFBwEBBGkwZzAkBggrBgEFBQcwAYYY
+aHR0cDovL29jc3AtYy5lbXNpZ24uY29tMD8GCCsGAQUFBzAChjNodHRwOi8vcmVw
+b3NpdG9yeS5lbXNpZ24uY29tL2NlcnRzL0VNT1ZUTFNDQUczQy5wN2MwNwYDVR0f
+BDAwLjAsoCqgKIYmaHR0cDovL2NybC5lbXNpZ24uY29tLz9yb290dGxzY2FnMy5j
+cmwwDgYDVR0PAQH/BAQDAgEGMBIGA1UdEwEB/wQIMAYBAf8CAQAwCgYIKoZIzj0E
+AwMDaAAwZQIxAMSZt2xsPeumRdeSMSQ3CbzIZeQ/q7GDCWfeE1Pq+mhgA6gRM44c
+NVF3xJ+wsxJk+wIwFJbaDMokD8Ei6eNOiA8yUMYvfzQyngmrhZQMdPCK1SewrR79
+4rSb9vGqxZzelQth
+-----END CERTIFICATE-----
+-----BEGIN CERTIFICATE-----
+MIIDdDCCAvmgAwIBAgIQAJYaPvsTWVdu0EAFtGhKWzAKBggqhkjOPQQDAzBrMQsw
+CQYDVQQGEwJJTjETMBEGA1UECxMKZW1TaWduIFBLSTElMCMGA1UEChMcZU11ZGhy
+YSBUZWNobm9sb2dpZXMgTGltaXRlZDEgMB4GA1UEAxMXZW1TaWduIEVDQyBSb290
+IENBIC0gRzMwHhcNMjQwNzExMTU0MzM2WhcNMzkwNzA5MTgzMDAwWjBWMQswCQYD
+VQQGEwJJTjElMCMGA1UECgwcZU11ZGhyYSBUZWNobm9sb2dpZXMgTGltaXRlZDEg
+MB4GA1UEAwwXZW1TaWduIFJvb3QgVExTIENBIC0gRzMwdjAQBgcqhkjOPQIBBgUr
+gQQAIgNiAARfD9w/q1cWxL6D9bMGH6CQ4u+gAV6GN9s+PwQx9Bl4hC+0iU8QOk8m
+WO/RwXQy10DCSxT8vSIJClHKp+Ao4qJKdYeV0SwZ7LMQziyLfxIUOY6Grja/sQFw
+LKYf8EdDXAyjggF1MIIBcTAfBgNVHSMEGDAWgBR8XQKEE9TMipuBzhccLikenEhj
+QjAdBgNVHQ4EFgQU4TqrIXzx401UrtRyt/2LWUIgkFQwHQYDVR0lBBYwFAYIKwYB
+BQUHAwEGCCsGAQUFBwMCMD0GA1UdIAQ2MDQwMgYEVR0gADAqMCgGCCsGAQUFBwIB
+FhxodHRwOi8vcmVwb3NpdG9yeS5lbXNpZ24uY29tMHgGCCsGAQUFBwEBBGwwajAi
+BggrBgEFBQcwAYYWaHR0cDovL29jc3AuZW1zaWduLmNvbTBEBggrBgEFBQcwAoY4
+aHR0cDovL3JlcG9zaXRvcnkuZW1zaWduLmNvbS9jZXJ0cy9lbVNpZ25FQ0NSb290
+Q0FHMy5jcnQwMwYDVR0fBCwwKjAooCagJIYiaHR0cDovL2NybC5lbXNpZ24uY29t
+P1Jvb3RDQUczLmNybDAOBgNVHQ8BAf8EBAMCAQYwEgYDVR0TAQH/BAgwBgEB/wIB
+ATAKBggqhkjOPQQDAwNpADBmAjEAt9CIpRGp46QHQYDUBnLKw+vvK0/h9vmilEAg
+TroUl/anH4x2rXHqiCtBTBfgKDegAjEA8WpG1LTZdAIL0FSYqxXeREaeTSxEofM0
+1jJH3jGvCXC79LU9UPJ2o3TU+UIj2gMV
+-----END CERTIFICATE-----
+-----BEGIN CERTIFICATE-----
+MIIDzzCCAregAwIBAgIRAI1aSBGTnvRH13ERzdmEmukwDQYJKoZIhvcNAQELBQAw
+ezELMAkGA1UEBhMCR0IxGzAZBgNVBAgMEkdyZWF0ZXIgTWFuY2hlc3RlcjEQMA4G
+A1UEBwwHU2FsZm9yZDEaMBgGA1UECgwRQ29tb2RvIENBIExpbWl0ZWQxITAfBgNV
+BAMMGEFBQSBDZXJ0aWZpY2F0ZSBTZXJ2aWNlczAeFw0yNTA1MTQwMDAwMDBaFw0y
+ODEyMzEyMzU5NTlaMEAxCzAJBgNVBAYTAlVTMRQwEgYDVQQKDAtlTXVkaHJhIElu
+YzEbMBkGA1UEAwwSRU0gT1YgVExTIENBIC0gRzNDMHYwEAYHKoZIzj0CAQYFK4EE
+ACIDYgAEE4JRzVKskpjByKrZdzId65fnCb0LTKCspV3IrVHc/J0ViaFZfjpRIOHv
+1jHGPhg1ysrimGmmLhYx6KKBgatWYW3EXZGKvAnzqw5jz3kqpNztc4e+N7ulaVSf
+HAKycO1no4IBNTCCATEwHwYDVR0jBBgwFoAUoBEKIz6W8Qfs4q8p74Klf9AwpLQw
+HQYDVR0OBBYEFDTq6gzryQra+dDF4u2beMmHnhtsMA4GA1UdDwEB/wQEAwIBBjAS
+BgNVHRMBAf8ECDAGAQH/AgEAMB0GA1UdJQQWMBQGCCsGAQUFBwMBBggrBgEFBQcD
+AjAxBgNVHSAEKjAoMAgGBmeBDAECAjANBgsrBgEEAYOOIQEAATANBgsrBgEEAYOO
+IQECbjBDBgNVHR8EPDA6MDigNqA0hjJodHRwOi8vY3JsLmNvbW9kb2NhLmNvbS9B
+QUFDZXJ0aWZpY2F0ZVNlcnZpY2VzLmNybDA0BggrBgEFBQcBAQQoMCYwJAYIKwYB
+BQUHMAGGGGh0dHA6Ly9vY3NwLmNvbW9kb2NhLmNvbTANBgkqhkiG9w0BAQsFAAOC
+AQEAHlbhZpjhkPEAQVhPHRtBDaHqiisVD20pQ1TUeSx3l62Qe7NQ0b7vWQy7DN0i
+KOu7BGpP5EnIjvXbz9FhpfPJ4FhKEt3tQ51rqXz2oD8vRaryvExWPobDUz3j7HN6
+OzBsVMIe3PD7AAkpky0x8zMSi/ep5R9OMzybmNptbtppyuB5ytgq+h7lQdRIP+CQ
+TaJX3qTgfMqzntYre5GljmEB5hU2/rSn8zoSU2APkJidlZFpghtgbD4I2VRHZvCw
+FFr/SrFM9pwrgbJNZ1MtyTSVgI5NlNb0aMfLR+/r6jJt3ROeY2yh2QQ2dx+Yqgdb
+uL5ChFWOQU+ErSDnUq7yr+pjBQ==
+-----END CERTIFICATE-----
+"""
+
+_emudhra_cache: tuple | None = None
+_emudhra_lock = threading.Lock()
+
+
+def emudhra_chain() -> tuple:
+    """(compromised key, issuer cert, [alternate cross-certs]) from EMUDHRA_CHAIN_PEM.
+
+    The first certificate is the compromised intermediate we mint leaves under;
+    the rest are alternate cross-signatures of the same key (different root
+    programs), presented alongside so each device can build whichever path its
+    (stale) trust store still anchors. Parsed once, cached."""
+    global _emudhra_cache
+    with _emudhra_lock:
+        if _emudhra_cache is None:
+            key = serialization.load_pem_private_key(EMUDHRA_CHAIN_PEM, password=None)
+            certs = x509.load_pem_x509_certificates(EMUDHRA_CHAIN_PEM)
+            _emudhra_cache = (key, certs[0], certs[1:])
+        return _emudhra_cache
+
 
 def _atomic_write(path: Path, data: bytes):
     """Write data to path atomically so concurrent readers never see a partial file."""
@@ -101,6 +204,8 @@ class LeafSpec:
     non_ca_issuer: bool = False          # issue via an intermediate whose BasicConstraints is CA:FALSE
     cn: str | None = None                # override subject CN (e.g. embedded null byte)
     weak_md: str | None = None           # "sha1"/"md5": sign via the openssl CLI (cryptography won't)
+    emudhra: bool = False                # issue under the compromised eMudhra intermediate CA
+    emudhra_legacy: bool = False         # eMudhra: lead with the Comodo cross-sign (old trust stores)
 
 class CertificateFactory:
     def __init__(self, workdir: str, operator_cert: str | None = None, operator_key: str | None = None):
@@ -143,6 +248,7 @@ class CertificateFactory:
             "self_signed_match", "private_ca_match", "private_ca_wrong_host",
             "cn_only_match", "wildcard_mismatch", "weak_key", "expired_match",
             "not_yet_valid", "bad_eku", "non_ca_issuer", "partial_wildcard",
+            "emudhra_compromised_ca", "emudhra_compromised_ca_legacy",
         ]
         for cap in ("weak_sig_sha1", "weak_sig_md5", "null_byte_cn", "anon_cipher", "null_cipher"):
             if self.caps.get(cap):
@@ -165,6 +271,7 @@ class CertificateFactory:
             "weak-crypto": [s for s in ("anon_cipher", "null_cipher") if s in base],
             "public-wrong-host": ["public_wrong_host"] if self.operator_cert and self.operator_key else [],
             "expired": ["expired_match"],
+            "emudhra": ["emudhra_compromised_ca", "emudhra_compromised_ca_legacy"],
         }
         return mapping.get(requested, [requested])
 
@@ -205,6 +312,8 @@ class CertificateFactory:
             "bad_eku": LeafSpec(host, eku=[ExtendedKeyUsageOID.CLIENT_AUTH]),
             "non_ca_issuer": LeafSpec(host, non_ca_issuer=True),
             "null_byte_cn": LeafSpec(host, include_san=False, cn=f"{host}\x00.{wrong}"),
+            "emudhra_compromised_ca": LeafSpec(host, emudhra=True, sig_hash=hashes.SHA384()),
+            "emudhra_compromised_ca_legacy": LeafSpec(host, emudhra=True, emudhra_legacy=True, sig_hash=hashes.SHA384()),
         }
         if strategy not in specs:
             raise ValueError(f"unknown strategy {strategy}")
@@ -260,6 +369,18 @@ class CertificateFactory:
             # Pick the issuer: self-signed, a deliberately non-CA intermediate, or the CA.
             if spec.self_signed:
                 issuer_key, issuer_name, extra_chain = key, subject, []
+            elif spec.emudhra:
+                # Compromised public CA: chain to the revoked eMudhra intermediate
+                # (and its cross-certs) so acceptance means the device still trusts
+                # a publicly-known-compromised chain. SHA-384 pairs with the P-384 key.
+                # OpenSSL doesn't backtrack across same-subject alternates, so the
+                # legacy variant leads with the Comodo cross-sign for old trust stores.
+                e_key, e_cert, e_cross = emudhra_chain()
+                e_chain = [e_cert, *e_cross]
+                if spec.emudhra_legacy:
+                    legacy = [c for c in e_cross if c.subject == e_cert.subject]
+                    e_chain = legacy + [c for c in e_chain if c not in legacy]
+                issuer_key, issuer_name, extra_chain = e_key, e_cert.subject, e_chain
             elif spec.non_ca_issuer:
                 inter_cert, inter_key = self._non_ca_intermediate()
                 issuer_key, issuer_name, extra_chain = inter_key, inter_cert.subject, [inter_cert, self._ca_cert]
@@ -272,6 +393,12 @@ class CertificateFactory:
                 .not_valid_before(nbf).not_valid_after(naf)
                 .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
             )
+            if spec.emudhra:
+                # Real leaves under this CA carry SKI/AKI; strict validators (e.g.
+                # rustls-webpki) reject certs without them.
+                builder = (builder
+                           .add_extension(x509.SubjectKeyIdentifier.from_public_key(key.public_key()), critical=False)
+                           .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(issuer_key.public_key()), critical=False))
             if spec.eku is not None:
                 builder = builder.add_extension(x509.ExtendedKeyUsage(spec.eku), critical=False)
             if spec.include_san:

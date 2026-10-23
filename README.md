@@ -53,7 +53,7 @@ tshark -nr <session-dir>/capture.pcap -o tls.keylog_file:<session-dir>/sslkeys.l
                                self-signed, private-ca, cn-only, wildcard,
                                weak-key, weak-sig, not-yet-valid, bad-eku,
                                non-ca-issuer, null-cn, weak-crypto, expired,
-                               public-wrong-host
+                               public-wrong-host, emudhra
 --cert/--key PEM               operator cert for public-wrong-host testing
 --redirect-ports 80,443        restrict redirected TCP ports
 --no-funnel                    don't block QUIC/DoH/DoT or run the DNS responder
@@ -67,6 +67,7 @@ tshark -nr <session-dir>/capture.pcap -o tls.keylog_file:<session-dir>/sslkeys.l
 ## What it does
 
 - **Cert strategies** — each isolates one validation defect, tried one per connection and rotated across reconnects: chain/trust (`self-signed`, `private-ca`, `non-ca-issuer`), hostname (`cn-only`, `wildcard`, `partial-wildcard`, `null-cn`), validity (`expired`, `not-yet-valid`), and key/signature/extension (`weak-key`, `weak-sig` SHA-1/MD5, `bad-eku`), plus `public-wrong-host` with `--cert/--key`. Rejections are classified by the client's TLS alert, and endpoints that refuse everything opaquely are flagged as **likely certificate pinning**.
+- **eMudhra compromised CA** — the `emudhra` group mints leaves under the compromised eMudhra "EM OV TLS CA - G3C" intermediate from the October 2026 incident (publicly known ECDSA key) and presents its cross-certificate paths: `emudhra_compromised_ca` leads with the emSign path (modern trust stores), `emudhra_compromised_ca_legacy` with the Comodo "AAA Certificate Services" cross-sign (legacy stores). A device that accepts either still trusts a publicly compromised CA — a frozen trust store or no revocation/distrust updating — and its traffic is fully MITM-decryptable. The key is public knowledge; never present this chain outside authorized testing.
 - **Weak-crypto probes** — offers anonymous (`aNULL`, no certificate) and NULL-encryption (`eNULL`) ciphers; acceptance means a device can be MITM'd with no cert at all, or talks cleartext on the wire.
 - **DTLS interception** — transparently MITMs **CoAP/DTLS** (UDP 5684) with the same forged-cert strategies, decrypting and capturing the CoAP underneath (X.509-mode only; PSK/raw-public-key can't be MITM'd). Requires `pyOpenSSL` and conntrack visibility (the `conntrack` tool or `/proc/net/nf_conntrack`).
 - **Traffic funnel** (on by default, active mode) — blocks QUIC/HTTP3, DoH/DoT, suppresses AAAA, and strips STARTTLS so traffic falls back into the interceptable TCP+TLS path. Flags **TLS fail-open** if a device retries in cleartext after its handshake is refused.

@@ -32,6 +32,8 @@ FINDING_LABELS = {
     "null_byte_cn": "HIGH accepts null-byte in certificate name",
     "anon_cipher": "HIGH negotiates anonymous cipher (MITM without any cert)",
     "null_cipher": "HIGH negotiates NULL cipher (cleartext on the wire)",
+    "emudhra_compromised_ca": "CRITICAL accepts cert from compromised eMudhra CA (stale trust store / no revocation checking)",
+    "emudhra_compromised_ca_legacy": "CRITICAL accepts cert from compromised eMudhra CA via legacy Comodo cross-sign (ancient trust store)",
 }
 
 
@@ -44,7 +46,7 @@ def parse_args(argv=None):
     p.add_argument("--cert", dest="cert_opt", help="operator public certificate/fullchain PEM")
     p.add_argument("--key", dest="key_opt", help="operator private key PEM")
     p.add_argument("--mode", choices=["passive", "active"], default="active")
-    p.add_argument("--strategy", choices=["all", "self-signed", "private-ca", "cn-only", "wildcard", "weak-key", "weak-sig", "not-yet-valid", "bad-eku", "non-ca-issuer", "null-cn", "weak-crypto", "public-wrong-host", "expired"], default="all")
+    p.add_argument("--strategy", choices=["all", "self-signed", "private-ca", "cn-only", "wildcard", "weak-key", "weak-sig", "not-yet-valid", "bad-eku", "non-ca-issuer", "null-cn", "weak-crypto", "public-wrong-host", "expired", "emudhra"], default="all")
     p.add_argument("--retest", choices=["wait", "rst", "auto"], default="wait")
     p.add_argument("--continue-after-success", action="store_true", help="keep rotating strategies after one succeeds")
     p.add_argument("--jsonl", action="store_true", help="emit full JSONL event stream on stdout")

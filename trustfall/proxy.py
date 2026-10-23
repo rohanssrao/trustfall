@@ -103,6 +103,8 @@ STRATEGY_FINDING = {
     "null_byte_cn": "accepts_null_byte_in_cn",
     "anon_cipher": "accepts_anonymous_cipher_no_cert",
     "null_cipher": "accepts_null_cipher_cleartext",
+    "emudhra_compromised_ca": "trusts_compromised_public_ca",
+    "emudhra_compromised_ca_legacy": "trusts_compromised_public_ca",
 }
 
 
