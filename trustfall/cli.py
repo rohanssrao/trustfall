@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import atexit
 import json
+import os
 import signal
 import sys
 import threading
@@ -173,23 +174,34 @@ def main(argv=None):
         proxy.stop.set()
         if dtls_proxy:
             dtls_proxy.stop.set()
-        if ipv6_suppressor:
-            log.emit("INFO", msg="stopping ipv6 suppression")
-            ipv6_suppressor.restore()
-        if dns_responder:
-            log.emit("INFO", msg="stopping dns responder")
-            dns_responder.restore()
-        if spoofer:
-            log.emit("INFO", msg="restoring arp")
-            spoofer.restore()
-        if nf:
-            log.emit("INFO", msg="removing netfilter")
-            nf.cleanup()
+        # Restore the network path FIRST, before any logging or summary work: if a
+        # worker thread crashed in a bad state and hangs a later step, the target's
+        # connectivity must already be back. Each step is isolated so one failure
+        # cannot skip the others.
+        def _step(name, fn):
+            try:
+                fn()
+            except Exception as e:  # noqa: BLE001
+                print(f"cleanup: {name} failed: {e}", file=sys.stderr)
+        _step("netfilter", lambda: nf and nf.cleanup())
+        _step("arp", lambda: spoofer and spoofer.restore())
+        _step("dns", lambda: dns_responder and dns_responder.restore())
+        _step("ipv6", lambda: ipv6_suppressor and ipv6_suppressor.restore())
         print_summary(log, state, session_dir)
         log.close()
 
     atexit.register(cleanup)
     def handle_signal(_signo, _frame):
+        if getattr(handle_signal, "fired", False):
+            # Second signal: don't wait on a possibly-stuck cleanup — restore the
+            # intercept path directly and exit hard.
+            try:
+                if nf:
+                    nf.cleanup()
+            except Exception:  # noqa: BLE001
+                pass
+            os._exit(130)
+        handle_signal.fired = True
         raise KeyboardInterrupt
 
     signal.signal(signal.SIGINT, handle_signal)
