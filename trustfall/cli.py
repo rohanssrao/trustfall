@@ -14,7 +14,11 @@ from . import APP, __version__
 from .logging import EventLogger
 
 BANNER = f"{APP.capitalize()}: use only on devices/networks you own or are authorized to test."
-DEFAULT_REDIRECT_PORTS = "80,443,8080,8443,8883"
+# 8883 (aws-iot MQTT) must NOT be redirected: AWS IoT requires
+# client-certificate mTLS, so an interposer can never complete the
+# upstream leg -- it just resets the camera's MQTT connection and
+# takes the camera's command channel down with it.
+DEFAULT_REDIRECT_PORTS = "80,443,8080,8443"
 FINDING_LABELS = {
     "self_signed_match": "HIGH missing chain validation",
     "private_ca_match": "HIGH accepts unknown/private CA",
