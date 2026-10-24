@@ -25,6 +25,13 @@ IDLE_TIMEOUT = 60
 # sends get a generous cap so a dead peer cannot wedge a thread forever.
 RECV_POLL_TIMEOUT = 2
 SEND_TIMEOUT = 60
+# How long to wait for the client's first bytes before treating the
+# connection as a server-speaks-first protocol (e.g. TUTK IOTC masters
+# listening on tcp/443, which send a binary banner before the client says
+# anything). Waiting any longer black-holes such clients: the upstream
+# connect only happens after the peek, so a full socket timeout here means
+# the server never hears the connection at all.
+PEEK_TIMEOUT = 2
 FIRST_APP_DATA_TIMEOUT = 3
 MAX_SCAN_BYTES = 256 * 1024  # per-direction cap for in-memory secret scanning
 STARTTLS_PORTS = {25, 587, 143, 110, 21, 5222}  # opportunistic-TLS protocols
@@ -283,18 +290,24 @@ class ProxyServer:
     def handle(self, client: socket.socket, addr):
         try:
             dst_ip, dst_port = original_dst(client)
-            peek = client.recv(4096, socket.MSG_PEEK)
+            client.settimeout(PEEK_TIMEOUT)
+            try:
+                peek = client.recv(4096, socket.MSG_PEEK)
+            except OSError:
+                peek = b""
+            client.settimeout(10)
             if looks_tls(peek):
                 hello = parse_client_hello(peek)
                 self.log.emit("TLS_CLIENTHELLO", source="proxy", client=addr[0], dest=f"{dst_ip}:{dst_port}", sni=hello.sni or "none", alpn=",".join(hello.alpn) or None, versions=",".join(hello.offered_versions) or None, ja3=hello.ja3_hash)
                 return self._handle_tls(client, dst_ip, dst_port, hello)
-            self.log.emit("TCP", client=addr[0], dest=f"{dst_ip}:{dst_port}", proto="plaintext")
+            proto = "server-first" if not peek else "plaintext"
+            self.log.emit("TCP", client=addr[0], dest=f"{dst_ip}:{dst_port}", proto=proto)
             hit = self.failopen.check_plaintext(dst_ip, dst_port)
             if hit:
                 self.log.emit("FAIL_OPEN", dest=f"{dst_ip}:{dst_port}", tls_port=hit["tls_port"], sni=hit["sni"] or "none",
                               finding="tls_failure_cleartext_fallback",
                               msg="device retried in cleartext after TLS was refused")
-            return self._forward(client, dst_ip, dst_port, downstream_tls=False, proto="tcp")
+            return self._forward(client, dst_ip, dst_port, downstream_tls=False, proto=proto)
         except Exception as e:
             self.log.emit("ERROR", msg="proxy handler failed", error=str(e))
             close_quietly(client)
