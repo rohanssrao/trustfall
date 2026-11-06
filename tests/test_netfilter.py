@@ -48,3 +48,17 @@ def test_dtls_redirect_rules():
     rules = _rule_strings(Netfilter(_env(), 9900, [443], funnel=True, dtls_port=9856))
     assert any("udp --dport 5684 -j REDIRECT --to-ports 9856" in r for r in rules)
     assert any("INPUT" in r and "udp --dport 9856 -j ACCEPT" in r for r in rules)
+
+
+def test_router_mode_masquerades_the_target():
+    rules = _rule_strings(Netfilter(_env(), 9900, [443], masquerade=True))
+    assert "iptables -t nat -A POSTROUTING -s 10.0.0.50 -o eth0 -j MASQUERADE" in rules
+    assert not any("MASQUERADE" in r for r in _rule_strings(Netfilter(_env(), 9900, [443])))
+
+
+def test_routing_only_installs_no_interception():
+    rules = _rule_strings(Netfilter(_env(), 9900, [443], funnel=True, dns_port=9953,
+                                    masquerade=True, intercept=False))
+    assert not any("REDIRECT" in r or "INPUT" in r or "DROP" in r for r in rules)
+    assert any("MASQUERADE" in r for r in rules)
+    assert any("FORWARD" in r and "-d 10.0.0.50" in r for r in rules)

@@ -96,3 +96,16 @@ def test_dtls_redirect_and_input_accept():
     rs = _ruleset(redirect_ports=[443], funnel=True, dtls_port=9856)
     assert "ip saddr 10.0.0.50 udp dport 5684 redirect to :9856" in rs
     assert "ip saddr 10.0.0.50 udp dport 9856 accept" in rs
+
+
+def test_router_mode_masquerades_in_a_postrouting_chain():
+    rs = _ruleset(redirect_ports=[443], masquerade=True)
+    assert "type nat hook postrouting priority srcnat" in rs
+    assert 'ip saddr 10.0.0.50 oifname "eth0" masquerade' in rs
+    assert "masquerade" not in _ruleset(redirect_ports=[443])
+
+
+def test_routing_only_ruleset_has_no_redirects():
+    rs = _ruleset(redirect_ports=[443], funnel=True, dns_port=9953, masquerade=True, intercept=False)
+    assert "redirect" not in rs and "prerouting" not in rs and "drop" not in rs
+    assert "masquerade" in rs and "ip daddr 10.0.0.50 accept" in rs

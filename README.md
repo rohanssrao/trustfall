@@ -1,6 +1,6 @@
 # trustfall
 
-A transparent MitM harness for sniffing and breaking TLS over a network. It ARP-spoofs the target, redirects its TCP flows through a local proxy, and tries several strategies to crack its TLS traffic. Outputs plaintext, findings by category, and a .pcap for analysis. Designed to be as easy as possible to use -- no configuration or preparation necessary.
+A transparent MitM harness for sniffing and breaking TLS over a network. It ARP-spoofs the target into using this host as its gateway, redirects its TCP flows through a local proxy, and tries several strategies to crack its TLS traffic. Outputs plaintext, findings by category, and a .pcap for analysis. Designed to be as easy as possible to use -- no configuration or preparation necessary.
 
 ## Usage
 
@@ -73,6 +73,10 @@ tshark -nr <session-dir>/capture.pcap -o tls.keylog_file:<session-dir>/sslkeys.l
 - **Traffic funnel** (on by default, active mode) — blocks QUIC/HTTP3, DoH/DoT, suppresses AAAA, and strips STARTTLS so traffic falls back into the interceptable TCP+TLS path. Flags **TLS fail-open** if a device retries in cleartext after its handshake is refused.
 - **Passive recon** — decodes SNI/ALPN/**JA3**, DNS, mDNS service names, and plaintext **CoAP**; flags **IPv6 escape** (traffic outside IPv4 ARP scope). Captures the *real* upstream cert for ground-truth comparison and scans payloads for secrets.
 - **Outputs** — `summary.json` (per-endpoint findings + a device inventory of domains/endpoints/protocols/JA3), `events.jsonl`, per-session payloads, and a Wireshark-decryptable pcap.
+
+## Network changes
+
+Only the target is ARP-spoofed: it's told this host is its gateway, and its forwarded traffic leaves under this host's address (MASQUERADE), so the real router and other devices keep their normal routes. ICMP redirects are switched off while the target is routed. On exit, the target's ARP entry, the firewall rules and the sysctls are put back; `--cleanup-only` removes leftover rules after a crash.
 
 ## Platform support
 

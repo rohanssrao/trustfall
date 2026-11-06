@@ -217,8 +217,12 @@ def main(argv=None):
                  hint="open in Wireshark; set TLS (Pre)-Master-Secret log to sslkeys.log to decrypt intercepted TLS")
     start_dns_sniffer(env, log, stop, include_udp=args.include_udp, pcap_path=pcap_path)
 
+    # router mode: with ARP spoofing, the target's forwarded traffic leaves
+    # under this host's address (see system.ArpSpoofer)
+    routing = {"masquerade": not args.no_arp}
     if args.mode == "active" and not args.no_netfilter:
-        nf = Redirector(env, args.listen_port, redirect_ports, funnel=funnel, dns_port=dns_port, dtls_port=dtls_port)
+        nf = Redirector(env, args.listen_port, redirect_ports, funnel=funnel, dns_port=dns_port,
+                        dtls_port=dtls_port, **routing)
         nf.install()
         log.emit("INFO", msg="netfilter installed", backend=backend, redirect_ports=args.redirect_ports, funnel=funnel)
         if IS_MACOS:
@@ -237,9 +241,14 @@ def main(argv=None):
                 "override one another. Inspect with `nft list ruleset`."
             ))
     elif not args.no_arp:
-        nf = Redirector(env, args.listen_port, redirect_ports)
-        nf.enable_forwarding()
-        log.emit("INFO", msg="ip_forward enabled")
+        if IS_MACOS or args.no_netfilter:
+            nf = Redirector(env, args.listen_port, redirect_ports, **routing)
+            nf.enable_forwarding()
+            log.emit("INFO", msg="ip_forward enabled")
+        else:
+            nf = Redirector(env, args.listen_port, redirect_ports, intercept=False, **routing)
+            nf.install()
+            log.emit("INFO", msg="routing the target through this host (no interception)")
 
     if funnel:
         upstream = args.dns_upstream or env.gateway_ip

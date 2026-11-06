@@ -23,13 +23,16 @@ class PacketFilter:
     """
 
     def __init__(self, env, port: int, redirect_ports: list[int] | None = None,
-                 funnel: bool = False, dns_port: int = 0, dtls_port: int = 0):
+                 funnel: bool = False, dns_port: int = 0, dtls_port: int = 0,
+                 masquerade: bool = False, intercept: bool = True):
         self.env = env
         self.port = port
         self.redirect_ports = redirect_ports or []
         self.funnel = funnel
         self.dns_port = dns_port
-        self.dtls_port = dtls_port  # accepted for backend parity; macOS interception is recon-only
+        # accepted for backend parity; macOS interception is recon-only
+        self.dtls_port = dtls_port
+        self.masquerade, self.intercept = masquerade, intercept
         self._was_enabled = False
         self._conf_path: str | None = None
 
