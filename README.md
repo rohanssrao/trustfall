@@ -1,6 +1,25 @@
 # trustfall
 
-A transparent MitM harness for sniffing and breaking TLS over a network. It ARP-spoofs the target into using this host as its gateway, redirects its TCP flows through a local proxy, and tries several strategies to crack its TLS traffic. Outputs plaintext, findings by category, and a .pcap for analysis. Designed to be as easy as possible to use -- no configuration or preparation necessary.
+A transparent MitM harness for sniffing and breaking TLS over a network. It ARP-spoofs the target into using this host as its gateway, redirects its TCP flows through a local proxy, and tries several strategies to crack its TLS traffic. Outputs plaintext, findings by category, and a .pcap for analysis. Designed to be as easy as possible to use - no configuration necessary, just point and shoot.
+
+## What it does
+
+- **Strategies**: tries several strategies to try to bypass valid TLS certificate handling from a MitM position, including:
+    - chain/trust (self-signed, private CA, non-CA issuer)
+    - hostname (CN-only, wildcard, partial wildcard, null CN)
+    - validity (expired, not yet valid)
+    - crypto (weak key, weak SHA-1/MD5 signature, bad EKU, anonymous and NULL-encryption ciphers)
+    - presenting a cert you own (requires `--cert` and `--key`)
+    - eMudhra: forges a cert under the compromised eMudhra  "EM OV TLS CA - G3C" intermediate cert that was broken October 2026
+- **DTLS interception**: MitMs CoAP/DTLS on UDP 5684 with the same strategies
+- **Traffic funneling**: blocks QUIC/HTTP3, DoH/DoT, AAAA, and strips STARTTLS to see if a device's traffic falls back into an interceptable TCP+TLS path.
+- **Passive recon**: decodes SNI, ALPN, JA3, DNS, mDNS names, and plaintext CoAP passively.
+
+## Network changes
+
+trustfall performs ARP spoofing to intercept and modify bidirectional traffic between a target device and its gateway. It presents itself to the target as the gateway and forwards its traffic to the real gateway with MASQUERADE. On exit, these rules are cleaned up and restored.
+
+ARP spoofing only works within a Layer 2 broadcast domain on a network without dynamic ARP inspection or client isolation. However, this is a surprisingly common configuration, especially on home networks and many public WiFi hotspots.
 
 ## Usage
 
@@ -64,22 +83,8 @@ tshark -nr <session-dir>/capture.pcap -o tls.keylog_file:<session-dir>/sslkeys.l
 --cleanup-only                 remove leftover firewall rules and exit
 ```
 
-## What it does
-
-- **Cert strategies** — each isolates one validation defect, tried one per connection and rotated across reconnects: chain/trust (`self-signed`, `private-ca`, `non-ca-issuer`), hostname (`cn-only`, `wildcard`, `partial-wildcard`, `null-cn`), validity (`expired`, `not-yet-valid`), and key/signature/extension (`weak-key`, `weak-sig` SHA-1/MD5, `bad-eku`), plus `public-wrong-host` with `--cert/--key`. Rejections are classified by the client's TLS alert, and endpoints that refuse everything opaquely are flagged as **likely certificate pinning**.
-- **eMudhra compromised CA** — the `emudhra` group mints leaves under the compromised eMudhra "EM OV TLS CA - G3C" intermediate from the October 2026 incident (publicly known ECDSA key) and presents its cross-certificate paths: `emudhra_compromised_ca` leads with the emSign path (modern trust stores), `emudhra_compromised_ca_legacy` with the Comodo "AAA Certificate Services" cross-sign (legacy stores). A device that accepts either still trusts a publicly compromised CA — a frozen trust store or no revocation/distrust updating — and its traffic is fully MITM-decryptable. The key is public knowledge; never present this chain outside authorized testing.
-- **Weak-crypto probes** — offers anonymous (`aNULL`, no certificate) and NULL-encryption (`eNULL`) ciphers; acceptance means a device can be MITM'd with no cert at all, or talks cleartext on the wire.
-- **DTLS interception** — transparently MITMs **CoAP/DTLS** (UDP 5684) with the same forged-cert strategies, decrypting and capturing the CoAP underneath (X.509-mode only; PSK/raw-public-key can't be MITM'd). Requires `pyOpenSSL` and conntrack visibility (the `conntrack` tool or `/proc/net/nf_conntrack`).
-- **Traffic funnel** (on by default, active mode) — blocks QUIC/HTTP3, DoH/DoT, suppresses AAAA, and strips STARTTLS so traffic falls back into the interceptable TCP+TLS path. Flags **TLS fail-open** if a device retries in cleartext after its handshake is refused.
-- **Passive recon** — decodes SNI/ALPN/**JA3**, DNS, mDNS service names, and plaintext **CoAP**; flags **IPv6 escape** (traffic outside IPv4 ARP scope). Captures the *real* upstream cert for ground-truth comparison and scans payloads for secrets.
-- **Outputs** — `summary.json` (per-endpoint findings + a device inventory of domains/endpoints/protocols/JA3), `events.jsonl`, per-session payloads, and a Wireshark-decryptable pcap.
-
-## Network changes
-
-Only the target is ARP-spoofed: it's told this host is its gateway, and its forwarded traffic leaves under this host's address (MASQUERADE), so the real router and other devices keep their normal routes. ICMP redirects are switched off while the target is routed. On exit, the target's ARP entry, the firewall rules and the sysctls are put back; `--cleanup-only` removes leftover rules after a crash.
-
 ## Platform support
 
-Linux is the fully-supported platform; the firewall backend (iptables or nftables) is auto-selected. On a host whose existing nftables forward chain has a `drop` policy, the target may need to be explicitly allowed to forward (`nft list ruleset`).
+trustfall fully supports Linux (iptables- and nftables-compatible).
 
-macOS is **recon-only**: discovery and passive monitoring work, but transparent interception does not — macOS does not deliver pf-`rdr`'d forwarded traffic to a local listener. Use Linux to intercept.
+macOS support is passive-only since it does not deliver pf-`rdr`'d forwarded traffic to a local listener.
