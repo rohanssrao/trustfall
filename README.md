@@ -1,6 +1,6 @@
 # trustfall
 
-A transparent MitM harness for sniffing and breaking TLS over a network. It ARP-spoofs the target into using this host as its gateway, redirects its TCP flows through a local proxy, and tries several strategies to crack its TLS traffic. Outputs plaintext, findings by category, and a .pcap for analysis. Designed to be as easy as possible to use - no configuration necessary, just point and shoot.
+A transparent MitM harness for sniffing and breaking TLS over a network. It ARP poisons a target to get MitM between it and its gateway, redirects its TCP flows through a local proxy, and tries several strategies to crack its TLS traffic. Outputs plaintext, findings by category, and a .pcap for analysis. Designed to be as easy as possible to use - no configuration necessary, just point and shoot.
 
 ## What it does
 
@@ -10,7 +10,7 @@ A transparent MitM harness for sniffing and breaking TLS over a network. It ARP-
     - validity (expired, not yet valid)
     - crypto (weak key, weak SHA-1/MD5 signature, bad EKU, anonymous and NULL-encryption ciphers)
     - presenting a cert you own (requires `--cert` and `--key`)
-    - eMudhra: forges a cert under the compromised eMudhra  "EM OV TLS CA - G3C" intermediate cert that was broken October 2026
+    - [eMudhra: forges a cert under the compromised eMudhra  "EM OV TLS CA - G3C" intermediate cert that was broken October 2026](https://en.wikipedia.org/wiki/EMudhra#2026_weak_key_incident)
 - **DTLS interception**: MitMs CoAP/DTLS on UDP 5684 with the same strategies
 - **Traffic funneling**: blocks QUIC/HTTP3, DoH/DoT, AAAA, and strips STARTTLS to see if a device's traffic falls back into an interceptable TCP+TLS path.
 - **Passive recon**: decodes SNI, ALPN, JA3, DNS, mDNS names, and plaintext CoAP passively.
